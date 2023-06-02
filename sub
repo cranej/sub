@@ -1,0 +1,11 @@
+#!/bin/bash
+
+audio_file=$(mpc current)
+srt_file="$HOME/subtitles/${audio_file%.mp3}.srt"
+echo "$srt_file"
+if [ -f "$srt_file" ]
+then
+	mpc status "%currenttime%" | srt "$srt_file"
+else
+	echo "$srt_file not exists"
+fi
