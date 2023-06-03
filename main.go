@@ -18,6 +18,7 @@ type Entry struct {
 	Text  string
 }
 
+// srt subtitle use timestamp format 'hh:mm:ss,milli'
 func parseTimestamp(s string) (uint64, error) {
 	var millsecs uint64
 	var hours uint64
@@ -63,7 +64,6 @@ func readEntry(s *bufio.Scanner) (*Entry, error) {
 	if s.Scan() {
 		text := s.Text()
 		if !validIdx.MatchString(text) {
-			fmt.Println(len(text))
 			return nil, errors.New("invalid idx: " + text)
 		}
 
@@ -75,7 +75,7 @@ func readEntry(s *bufio.Scanner) (*Entry, error) {
 		return nil, nil
 	}
 
-	// start --> end
+	// timestamp lines are in format 'start --> end'
 	var start uint64
 	var end uint64
 	if s.Scan() {
@@ -138,6 +138,8 @@ func parse(r io.Reader) ([]*Entry, error) {
 	return entries, nil
 }
 
+// mpc outputs current time of song in 'hh:mm' format, this function
+// parses it into milliseconds
 func parseQuery(s string) (uint64, error) {
 	parts := strings.Split(s, ":")
 	var minutes uint64
@@ -173,6 +175,7 @@ func readQuery() (uint64, error) {
 
 func queryAndPrint(entries []*Entry, query uint64) {
 	for _, e := range entries {
+		// +/- 1 second to make the search more tolerant
 		if e.End+1000 >= query && e.Start-1000 <= query {
 			fmt.Println(e.Text)
 		}
@@ -220,6 +223,7 @@ func main() {
 
 		queryAndPrint(entries, query)
 	} else {
+		// interactive mode
 		for {
 			fmt.Print("Input timestamp: ")
 			query, err := readQuery()
