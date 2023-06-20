@@ -11,3 +11,12 @@ It assumes your subtitle files are under "$HOME/subtitles/", and have the same b
 3. Run `sub` to print the subtitle at current point:
 
    ![screen](./screen.png)
+
+# Global offset
+
+Sometimes subtitle file may not exactly match the video, that's why media player like `mpv` has the functionality to adjust subtitle delay.
+
+With `srt`, there are two ways to specify a similar subtitle delay offset:
+
+1. With command line flag: `srt -offset 3500 <srt file>` set a 3500 milliseconds delay offset.
+2. Or you can add `OFFSET:3500` as the first line of subtitle file. Offset specfied in the file always override the offset specified by command line flag.

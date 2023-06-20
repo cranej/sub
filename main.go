@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -11,24 +12,35 @@ import (
 	"strings"
 )
 
+var globalOffset = flag.Int64("offset", 0, "global offset of subtitle, in case that srt file does not exactly match video.")
+
+func init() {
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage of %s:\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "%s [flags] <file> [mm:ss]\n\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "Flags:\n")
+		flag.PrintDefaults()
+	}
+}
+
 type Entry struct {
 	Idx   uint64
-	Start uint64
-	End   uint64
+	Start int64
+	End   int64
 	Text  string
 }
 
 // srt subtitle use timestamp format 'hh:mm:ss,milli'
-func parseTimestamp(s string) (uint64, error) {
-	var millsecs uint64
-	var hours uint64
-	var minutes uint64
-	var seconds uint64
+func parseTimestamp(s string) (int64, error) {
+	var millsecs int64
+	var hours int64
+	var minutes int64
+	var seconds int64
 	var err error
 
 	parts := strings.Split(s, ",")
 	if len(parts) == 2 {
-		millsecs, err = strconv.ParseUint(parts[1], 10, 0)
+		millsecs, err = strconv.ParseInt(parts[1], 10, 64)
 		if err != nil {
 			return 0, err
 		}
@@ -38,15 +50,15 @@ func parseTimestamp(s string) (uint64, error) {
 	if len(parts) != 3 {
 		return 0, errors.New("invalid timestamp: " + s)
 	} else {
-		hours, err = strconv.ParseUint(parts[0], 10, 0)
+		hours, err = strconv.ParseInt(parts[0], 10, 64)
 		if err != nil {
 			return 0, err
 		}
-		minutes, err = strconv.ParseUint(parts[1], 10, 0)
+		minutes, err = strconv.ParseInt(parts[1], 10, 64)
 		if err != nil {
 			return 0, err
 		}
-		seconds, err = strconv.ParseUint(parts[2], 10, 0)
+		seconds, err = strconv.ParseInt(parts[2], 10, 64)
 		if err != nil {
 			return 0, err
 		}
@@ -76,8 +88,8 @@ func readEntry(s *bufio.Scanner) (*Entry, error) {
 	}
 
 	// timestamp lines are in format 'start --> end'
-	var start uint64
-	var end uint64
+	var start int64
+	var end int64
 	if s.Scan() {
 		texts := strings.Split(s.Text(), " --> ")
 		if len(texts) != 2 {
@@ -120,9 +132,40 @@ func readEntry(s *bufio.Scanner) (*Entry, error) {
 	}
 }
 
-func parse(r io.Reader) ([]*Entry, error) {
+const OFFSET_HEADER string = "OFFSET:"
+
+func tryParseGlobalOffset(s *bufio.Scanner) (*int64, error) {
+	if s.Scan() {
+		text := s.Text()
+		if strings.HasPrefix(text, OFFSET_HEADER) {
+			offset, err := strconv.ParseInt(strings.TrimPrefix(text, OFFSET_HEADER), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+
+			return &offset, nil
+		}
+	}
+
+	return nil, nil
+}
+
+func parse(r io.ReadSeeker) ([]*Entry, error) {
 	entries := make([]*Entry, 0)
 	scanner := bufio.NewScanner(r)
+
+	offset, err := tryParseGlobalOffset(scanner)
+	if err != nil {
+		return entries, nil
+	}
+	if offset != nil {
+		*globalOffset = *offset
+	} else {
+		// reset reader and scanner if the first line is not global offset
+		r.Seek(0, io.SeekStart)
+		scanner = bufio.NewScanner(r)
+	}
+
 	for {
 		entry, err := readEntry(scanner)
 		if err != nil {
@@ -140,16 +183,16 @@ func parse(r io.Reader) ([]*Entry, error) {
 
 // mpc outputs current time of song in 'hh:mm' format, this function
 // parses it into milliseconds
-func parseQuery(s string) (uint64, error) {
+func parseQuery(s string) (int64, error) {
 	parts := strings.Split(s, ":")
-	var minutes uint64
-	var seconds uint64
+	var minutes int64
+	var seconds int64
 	var err error
-	minutes, err = strconv.ParseUint(parts[0], 10, 0)
+	minutes, err = strconv.ParseInt(parts[0], 10, 32)
 	if err != nil {
 		return 0, err
 	}
-	seconds, err = strconv.ParseUint(parts[1], 10, 0)
+	seconds, err = strconv.ParseInt(parts[1], 10, 32)
 	if err != nil {
 		return 0, err
 	}
@@ -158,7 +201,8 @@ func parseQuery(s string) (uint64, error) {
 }
 
 var readQueryEOF = errors.New("EOF")
-func readQuery() (uint64, error) {
+
+func readQuery() (int64, error) {
 	s := bufio.NewScanner(os.Stdin)
 
 	if !s.Scan() {
@@ -173,22 +217,24 @@ func readQuery() (uint64, error) {
 	return parseQuery(text)
 }
 
-func queryAndPrint(entries []*Entry, query uint64) {
+func queryAndPrint(entries []*Entry, query int64, offset int64) {
 	for _, e := range entries {
 		// +/- 1 second to make the search more tolerant
-		if e.End+1000 >= query && e.Start-1000 <= query {
+		if e.End+offset+1000 >= query && e.Start+offset-1000 <= query {
 			fmt.Println(e.Text)
 		}
 	}
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	flag.Parse()
+	args := flag.Args()
+	if len(args) == 0 {
 		fmt.Println("Usage: srt <file> [mm:ss]")
 		os.Exit(1)
 	}
 
-	f, err := os.Open(os.Args[1])
+	f, err := os.Open(args[0])
 	if err != nil {
 		fmt.Println("Error: ", err)
 		os.Exit(1)
@@ -206,14 +252,14 @@ func main() {
 	}
 
 	stat, _ := os.Stdin.Stat()
-	if len(os.Args) >= 3 {
-		query, err := parseQuery(os.Args[2])
+	if len(args) >= 2 {
+		query, err := parseQuery(args[1])
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
 
-		queryAndPrint(entries, query)
+		queryAndPrint(entries, query, *globalOffset)
 	} else if stat.Mode()&os.ModeCharDevice == 0 {
 		query, err := readQuery()
 		if err != nil {
@@ -221,7 +267,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		queryAndPrint(entries, query)
+		queryAndPrint(entries, query, *globalOffset)
 	} else {
 		// interactive mode
 		for {
@@ -236,7 +282,7 @@ func main() {
 				}
 			}
 
-			queryAndPrint(entries, query)
+			queryAndPrint(entries, query, *globalOffset)
 		}
 	}
 }
